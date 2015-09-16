@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Welcome</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/mytheme.min.css" />
+  <link rel="stylesheet" href="/static/jquery.mobile.icons.min.css" />
+  <link rel="stylesheet" href="/static/jquery.mobile.structure-1.4.5.min.css" />
+  <script src="/static/jquery-1.11.3.min.js"></script>
+  <script src="/static/jquery.mobile-1.4.5.min.js"></script>
+  <style>
+    a.ui-btn {
+      padding-bottom: 4px;
+      padding-top: 4px;
+    }
+  </style
+</head>
+<body>
+
+
+<div data-role="page">
+  <div data-role="main" class="ui-content">
+    <!-- data-count-theme="c"-->
+    <ul data-role="listview">
+      <% 
+	 import time
+	 now = time.time()  
+      %>
+    % for info in clients:
+	    <%
+	       elapsed = int(now - info.get('last'))
+	       format=""
+	       if elapsed<60:
+	          format = "%ssec" % (elapsed,)		    
+	       elif elapsed<3600:
+	          format = "%smin" % (elapsed/60,)
+	       else:
+	          format = "%sh" % (elapsed/3600,)
+
+               
+               theme="e"
+               red="a"
+               yellow="b"
+	       green="c"
+               blue="d"	      
+               data=""
+
+	       if 'saw' in info and info['saw']:
+	          theme=green
+
+	       if 'data' in info:
+                  theme=red			      
+	    %>
+
+         <li data-theme="${theme}"><a  href="/mydetails?ip=${info.get('ip')}">
+	    ${info.get('name')}
+	    <p>ip:${info.get('ip')} mac:${info.get('mac')}</p>
+	    <p>ssid: ${info.get('ssid')} </p>
+	    <p class="ui-li-aside">${format}</p>
+	</a></li>
+    % endfor    
+<!--         <li><a href="/data/test">test1 <span class="ui-li-count">10</span></a></li>
+         <li><a href="/data/test">test2 <span class="ui-li-count">20</span></a></li>
+
+    </ul>
+  </div>
+
+</div> 
+
+</body>
+</html>
+<!--
+
+
+<body>
+ <div data-role="page">
+  <div data-role="header">
+
+  </div
+  <div data-role="main" class="ui-content">
+    I Am Now A Mobile Developer!!
+  </div>
+
+ <div data-role="main" class="ui-content">
+      <p></p>
+
+</div>
+</body>
+-->

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Welcome</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/mytheme.min.css" />
+  <link rel="stylesheet" href="/static/jquery.mobile.icons.min.css" />
+  <link rel="stylesheet" href="/static/jquery.mobile.structure-1.4.5.min.css" />
+  <script src="/static/jquery-1.11.3.min.js"></script>
+  <script src="/static/jquery.mobile-1.4.5.min.js"></script>
+
+   <style>
+    p {
+        margin:0
+    }
+   </style>
+</head>
+<body>
+
+
+<div data-role="page">
+  <div data-role="main" class="ui-content">
+      <%
+	 data = ""
+         if 'data' in info:
+            data = "data <%s>" % (info['data'],)
+      %>
+      ${data}
+      <br/>
+      ${info.get("agent")}
+      % for url in info['urls']:
+        <p>${url}</p>
+      % endfor
+  </div>
+
+</div> 
+
+</body>
+</html>
