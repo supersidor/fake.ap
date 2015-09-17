@@ -18,8 +18,13 @@
 </head>
 <body>
 
+      <% 
+	 total = len(clients)
+	 detected = len(wireless)
+      %>
 
 <div data-role="page">
+  <div data-role="header"><h1>${total},${detected}</h1></div>
   <div data-role="main" class="ui-content">
     <!-- data-count-theme="c"-->
     <ul data-role="listview">
@@ -50,13 +55,17 @@
 	          theme=green
 
 	       if 'data' in info:
-                  theme=red			      
+                  theme=red
+	       ssid = None
+               w = info.get('wireless')			      
+	       if w:
+	          ssid = w.get('ssid') 
 	    %>
 
          <li data-theme="${theme}"><a  href="/mydetails?ip=${info.get('ip')}">
 	    ${info.get('name')}
 	    <p>ip:${info.get('ip')} mac:${info.get('mac')}</p>
-	    <p>ssid: ${info.get('ssid')} </p>
+	    <p>ssid: ${ssid} </p>
 	    <p class="ui-li-aside">${format}</p>
 	</a></li>
     % endfor    

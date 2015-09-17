@@ -24,7 +24,7 @@
       <%
 	 data = ""
          if 'data' in info:
-            data = info['data']
+            data = innnfo['data']
 
 	 probes = ""
          w = info.get('wireless')			      
