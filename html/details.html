@@ -23,25 +23,19 @@
   <div data-role="main" class="ui-content">
       <%
 	 data = ""
-         if 'data' in info:
+         if 'data' in info and info['data'] is not None:
             data = info['data']
 
-	 probes = ""
-         w = info.get('wireless')			      
-	 if w is not None:
-	    p = w.get('probes') 
-	    probes = "<br/>".join(str(e) for e in p)
-	 agents = "<br/>".join(str(e) for e in info.get('agents'))
+	 probes_str = ""
+	 if probes is not None:
+	     probes_str = "<br/>".join(str(e['ssid']) for e in probes)
+	 agents_str = ""
+	 if agents is not None:
+	     agents_str = "<br/>".join(str(e['agent']) for e in agents)
       %>
-      ${probes}
-      <hr/>
-      ${data}
-      <hr/>
-      ${agents}
-      <hr/>
-      % for url in info['urls']:
-        ${url}<br/>
-      % endfor
+      ${probes_str}                                                                                                                                                                                                     <hr/>                                                                                                                                                                                                             ${data}                                                                                                                                                                                                           <hr/>  
+      ${agents_str}                                                                                                                                                                                                     <hr/>    
+
   </div>
 
 </div> 

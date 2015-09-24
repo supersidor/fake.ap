@@ -14,27 +14,28 @@
       padding-bottom: 4px;
       padding-top: 4px;
     }
+    .ui-header .ui-title{
+      margin: 0 10%;
+    }
+
   </style
 </head>
 <body>
 
-      <% 
-	 total = len(clients)
-	 detected = len(wireless)
-      %>
 
 <div data-role="page">
-  <div data-role="header"><h1>${total},${detected}</h1></div>
+  <div data-role="header"><h1>assoc: ${stats['ass_last_hour']}-${stats['ass_last_day']}-${stats['ass_total']} 
+probe: ${stats['probe_last_hour']}-${stats['probe_last_day']}-${stats['probe_total']}</h1></div>
   <div data-role="main" class="ui-content">
     <!-- data-count-theme="c"-->
     <ul data-role="listview">
       <% 
-	 import time
-	 now = time.time()  
+	 from datetime import datetime
+	 now = datetime.now()
       %>
     % for info in clients:
 	    <%
-	       elapsed = int(now - info.get('last'))
+	       elapsed = int((now - info.get('last')).total_seconds())
 	       format=""
 	       if elapsed<60:
 	          format = "%ssec" % (elapsed,)		    
@@ -51,18 +52,16 @@
                blue="d"	      
                data=""
 
-	       if 'saw' in info and info['saw']:
+	       if 'saw' in info and info['saw']==1:
 	          theme=green
 
-	       if 'data' in info:
+	       if 'data' in info and info['data'] is not None:
                   theme=red
-	       ssid = None
-               w = info.get('wireless')			      
-	       if w:
-	          ssid = w.get('ssid') 
+
+	       ssid = info.get('ssid')
 	    %>
 
-         <li data-theme="${theme}"><a  href="/mydetails?ip=${info.get('ip')}">
+         <li data-theme="${theme}"><a  href="/mydetails?mac=${info.get('mac')}">
 	    ${info.get('name')}
 	    <p>ip:${info.get('ip')} mac:${info.get('mac')}</p>
 	    <p>ssid: ${ssid} </p>
