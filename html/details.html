@@ -32,9 +32,14 @@
 	 agents_str = ""
 	 if agents is not None:
 	     agents_str = "<br/>".join(str(e['agent']) for e in agents)
+	 sessions_str = ""
+	 if sessions is not None:
+	     sessions_str = "<br/>".join(e['first'].strftime("%d-%m-%y %H:%M")+" to "+ e['last'].strftime("%d-%m-%y %H:%M") for e in sessions)
+
       %>
       ${probes_str}                                                                                                                                                                                                     <hr/>                                                                                                                                                                                                             ${data}                                                                                                                                                                                                           <hr/>  
       ${agents_str}                                                                                                                                                                                                     <hr/>    
+      ${sessions_str}
 
   </div>
 

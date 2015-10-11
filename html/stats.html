@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Welcome</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/mytheme.min.css" />
+  <link rel="stylesheet" href="/static/jquery.mobile.icons.min.css" />
+  <link rel="stylesheet" href="/static/jquery.mobile.structure-1.4.5.min.css" />
+  <script src="/static/jquery-1.11.3.min.js"></script>
+  <script src="/static/jquery.mobile-1.4.5.min.js"></script>
+  <style>
+  .ui-header .ui-title{
+      margin: 0 14%;
+    }
+  
+  </style
+</head>
+<body>
+<!--
+    a.ui-btn {
+      padding-bottom: 4px;
+      padding-top: 4px;
+    }
+
+-->
+      <% 
+	 from datetime import datetime
+	 now = datetime.now()
+      %>
+
+<div data-role="page">
+  <div data-role="main" class="ui-content">
+    Time: ${now}
+  </div>
+</div> 
+
+</body>
+</html>

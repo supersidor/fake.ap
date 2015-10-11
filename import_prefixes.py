@@ -50,10 +50,35 @@ with open("mac-prefixes","r") as f:
            sys.exit()
         prefix =  m.group(1)
         vendor = m.group(2)
-        if 'samsung' in vendor.lower():
+        vlow = vendor.lower()
+        if 'samsung' in vlow:
             vendor = "Samsung"
-        if 'apple' in vendor.lower():
+        elif 'apple' in vlow:
             vendor = "Apple"
+        elif 'asustek' in vlow:
+            vendor = "Asus"
+        elif 'sony' in vlow:
+            vendor = "Sony"
+        elif 'lenovo' in vlow:
+            vendor = "Lenovo"
+        elif vendor == "zte":
+            vendor = "ZTE"
+        elif 'tp-link' in vlow:
+            vendor="TP-Link"
+        elif 'azurewave' in vlow:
+            vendor="AzureWave"
+        elif 'Hon Hai Precision' in vendor:
+            vendor="HonHaiPrecision"
+        elif 'motorola' in vlow:
+            vendor="Motorola"
+        elif 'intel' in vlow:
+            vendor="Intel"
+        elif vendor=="LG Electronics":
+            vendor="LG"
+        elif vendor=="LG Innotek":
+            vendor="LG"
+
+
 
 #        print prefix,"-",vendor
         if vendor not in vendors:

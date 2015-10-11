@@ -11,8 +11,9 @@ from time import sleep
 from mako.template import Template
 from mako.lookup import TemplateLookup
 from datetime import datetime,timedelta
+import functools
 
-lookup = TemplateLookup(directories=['html'],default_filters=['decode.utf8'],input_encoding='utf-8',output_encoding='utf-8')
+lookup = TemplateLookup(directories=['html'],default_filters=['decode.utf8'],input_encoding='utf-8',output_encoding='utf-8',encoding_errors='ignore')
 clients = {}
 wireless = {}
 dataFormID = 'verysecuredata'
@@ -39,7 +40,7 @@ def getClientByMAC(mac,cursor):
         cursor.execute("SELECT ssid FROM clients WHERE mac=?",(mac,))
         row = cursor.fetchone()
         if row==None:
-            cursor.execute("INSERT into clients (mac) values (?)",(mac,))
+            cursor.execute("INSERT into clients (mac,added,last) values (?,?,?)",(mac,datetime.now(),datetime.now()))
         else:
             ssid = row[0]
             if ssid is not None:
@@ -98,8 +99,14 @@ class Site(object):
             cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL AND last>?",(now-timedelta(hours=1),))
             stats['ass_last_hour'] = cursor.fetchone()['count']
 
+            cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL AND added>?",(now-timedelta(hours=1),))
+            stats['ass_last_hour_new'] = cursor.fetchone()['count']
+
             cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL AND last>?",(now-timedelta(days=1),))
             stats['ass_last_day'] = cursor.fetchone()['count']
+
+            cursor.execute("SELECT COUNT(*) as count FROM clients where ip is NOT NULL AND added>?",(now-timedelta(days=1),))
+            stats['ass_last_day_new'] = cursor.fetchone()['count']
 
             cursor.execute("SELECT COUNT(*) as count FROM clients")
             stats['probe_total'] = cursor.fetchone()['count']
@@ -107,14 +114,43 @@ class Site(object):
             cursor.execute("SELECT COUNT(*) as count FROM clients where last>?",(now-timedelta(hours=1),))
             stats['probe_last_hour'] = cursor.fetchone()['count']
 
+            test  = now-timedelta(hours=1)
+            print "test",test
+            cursor.execute("SELECT COUNT(*) as count FROM clients where added>?",(now-timedelta(hours=1),))
+            stats['probe_last_hour_new'] = cursor.fetchone()['count']
+
             cursor.execute("SELECT COUNT(*) as count FROM clients WHERE last>?",(now-timedelta(days=1),))
             stats['probe_last_day'] = cursor.fetchone()['count']
 
+            cursor.execute("SELECT COUNT(*) as count FROM clients WHERE added>?",(now-timedelta(days=1),))
+            stats['probe_last_day_new'] = cursor.fetchone()['count']
 
-            cursor.execute("SELECT * FROM clients WHERE ip IS NOT NULL ORDER BY last desc LIMIT 100")
+            print "stats",stats
+
+            cursor.execute("""SELECT clients.*,vendors.vendor as vendor,
+                              (SELECT COUNT(*) FROM sessions where sessions.mac=clients.mac) as sessions,
+                              (SELECT first FROM sessions where sessions.mac=clients.mac ORDER BY last desc LIMIT 1)  as sfirst,
+                              (SELECT last FROM sessions where sessions.mac=clients.mac ORDER BY last desc LIMIT 1)  as slast
+                              FROM clients,vendors 
+                              WHERE substr(replace(mac,':',''),1,6)==prefix AND  ip IS NOT NULL 
+                              ORDER BY last desc LIMIT 100""")
+            
+#            cursor.execute("SELECT clients.*,vendors.vendor as vendor FROM clients,vendors WHERE prefix(mac)==prefix ORDER BY last desc")
             clients = cursor.fetchall()
-            print stats
+            i = 0
+            for c in clients:
+                print c
+                i = i+1
+                if i==2:
+                    break
+#            print clients
+#            with open("test.txt","w") as log:
+#                for c in clients:
+#                    log.write(c['vendor'])
+#                    log.write("\n")
+                    
             return tmpl.render(clients=clients,stats=stats)
+
     @cherrypy.expose
     def mydetails(self, mac):
         tmpl = lookup.get_template("details.html")
@@ -130,7 +166,16 @@ class Site(object):
             probes = cursor.fetchall()
             cursor.execute("SELECT agent FROM agents WHERE mac=?",(mac,))
             agents = cursor.fetchall()
-            return tmpl.render(info=client,probes=probes,agents=agents)
+            cursor.execute("SELECT first,last FROM sessions WHERE mac=? ORDER BY first DESC",(mac,))
+            sessions = cursor.fetchall()
+
+            return tmpl.render(info=client,probes=probes,agents=agents,sessions=sessions)
+
+    @cherrypy.expose
+    def mystats(self):
+        tmpl = lookup.get_template("stats.html")
+        return tmpl.render()
+
     @cherrypy.expose
     def default(self,*args,**kwargs):
         start = time.time()
@@ -156,7 +201,7 @@ class Site(object):
             ssid=client.get('ssid')
             agents = client['agents']
             if agent is not None and agent not in agents:
-                cursor.execute("INSERT OR IGNORE INTO agents (mac,agent)  VALUES (?,?)",(mac,agent))
+                cursor.execute("INSERT OR IGNORE INTO agents (mac,agent,added)  VALUES (?,?,?)",(mac,agent,datetime.now()))
                 print 'add agent'
                 agents |= {agent}
             url = cherrypy.url()
@@ -273,6 +318,11 @@ def updateLastSeen(client,cursor):
         return result
 
 """
+def cleansid(sid):
+    try:
+        return sid.decode("utf-8")
+    except:
+        return "invalid"
 def airbaseReader():
     logfile = open("/var/log/airbase.log","r")
     probe=re.compile('directed probe request from ([a-f0-9:]+)\s+-\s+"(.*)"',re.IGNORECASE);
@@ -282,14 +332,14 @@ def airbaseReader():
         m = probe.search(line)
         if m:
           mac = m.group(1).upper()
-          ssid = m.group(2)
+          ssid = cleansid(m.group(2))
           with con:
 #              start = time.time()
               cursor = con.cursor()
               w = getClientByMAC(mac,cursor)
               probes = w['probes']
               if ssid not in probes:
-                  cursor.execute("INSERT OR IGNORE INTO probes (mac,ssid)  VALUES (?,?)",(mac,ssid))
+                  cursor.execute("INSERT OR IGNORE INTO probes (mac,ssid,added)  VALUES (?,?,?)",(mac,ssid,datetime.now()))
                   probes |= {ssid}
               updateLastSeen(w,cursor)
 #          end = time.time()
@@ -299,7 +349,7 @@ def airbaseReader():
           m = assoc.search(line)
           if m:
               mac = m.group(1).upper()
-              ssid = m.group(2)
+              ssid = cleansid(m.group(2))
 #              start = time.time()
               with con:
                   cursor = con.cursor()
@@ -320,22 +370,28 @@ def create_db():
            saw integer DEFAULT 0,
            data text,
            name varchar(255),
-           added timestamp DEFAULT CURRENT_TIMESTAMP,
-           last timestamp  DEFAULT CURRENT_TIMESTAMP,
+           added timestamp,
+           last timestamp,
            ssid varchar(255))""")
-    c.execute("""create table probes (mac char(17),ssid varchar(255),added timestamp DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("""create table probes (mac char(17),ssid varchar(255),added timestamp)""")
     c.execute("""create unique index probes_index ON probes (mac,ssid)""")
-    c.execute("""create table agents (mac char(17),agent text,added timestamp DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("""create table agents (mac char(17),agent text,added timestamp)""")
     c.execute("""create unique index agents_index ON agents (mac,agent)""")
     c.execute("""create table sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,mac char(17),first timestamp,last timestamp)""")
+
+def mac_prefix(mac):
+    return mac.replace(":","")[:6]
 
 def setup_con(con,row_factory):
     con.row_factory = sqlite3.Row
     if row_factory is not None:
         con.row_factory = row_factory
     con.text_factory = str
+ 
+    
 def connect_db():
     con = sqlite3.connect('clients.db',detect_types=sqlite3.PARSE_DECLTYPES)
+    con.create_function("prefix", 1, mac_prefix)
     return con
 
 def get_con(row_factory=None):
