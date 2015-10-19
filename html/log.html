@@ -89,12 +89,14 @@
 
 	       ssid = info.get('ssid')
 
-	      
+	       os_str = "<p>no OS info</p>"
+	       if info.get('os') is not None or info.get('model') is not None:
+	          os_str="<p>OS: %s  model: %s</p>" % (info.get('os'),info.get('model'))	     
 	    %>
 
          <li data-theme="${theme}"><a href="/mydetails?mac=${info.get('mac')}">
 	    ${info.get('name')} (${info.get('vendor')})
-	    <p>ip:${info.get('ip')} mac:${info.get('mac')}</p>
+	    ${os_str}
 	    <p>ssid: ${ssid}</p>
 	    <p class="ui-li-aside">${format} (${dur_format})</p>
 	    <span class="ui-li-count">${info.get('sessions')}</span>

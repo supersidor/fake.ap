@@ -34,12 +34,18 @@
 	     agents_str = "<br/>".join(str(e['agent']) for e in agents)
 	 sessions_str = ""
 	 if sessions is not None:
-	     sessions_str = "<br/>".join(e['first'].strftime("%d-%m-%y %H:%M")+" to "+ e['last'].strftime("%d-%m-%y %H:%M") for e in sessions)
+	     sessions_str = "<br/>".join(e['first'].strftime("%d-%m-%y %H:%M")+" to "+ e['last'].strftime("%d-%m-%y %H:%M")+" gps_r:"+str(e['gps_reliable']) for e in sessions)
+
+	 urls_str = ""
+	 if urls is not None:
+	     urls_str = "<br/>".join(str(e['url']) for e in urls)
 
       %>
       ${probes_str}                                                                                                                                                                                                     <hr/>                                                                                                                                                                                                             ${data}                                                                                                                                                                                                           <hr/>  
       ${agents_str}                                                                                                                                                                                                     <hr/>    
       ${sessions_str}
+      <hr/>    
+      ${urls_str}
 
   </div>
 

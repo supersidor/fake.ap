@@ -12,6 +12,9 @@ from mako.template import Template
 from mako.lookup import TemplateLookup
 from datetime import datetime,timedelta
 import functools
+import urllib2
+import phones
+import gpspoller
 
 lookup = TemplateLookup(directories=['html'],default_filters=['decode.utf8'],input_encoding='utf-8',output_encoding='utf-8',encoding_errors='ignore')
 clients = {}
@@ -21,12 +24,15 @@ wirelessLock = threading.RLock()
 cachedIndex = None
 tls = threading.local()
 session_interval = 3600 # 1 hour in seconds
+gps = gpspoller.initGps()
 
 def newClient():
     new = {}
     new['probes'] = set()    
     new['agents'] = set()
-    new['urls'] = []
+    new['urls'] = set()
+    new['os'] = None
+    new['model'] = None
     return new
 def getClientByMAC(mac,cursor):
     if mac in wireless:
@@ -37,7 +43,7 @@ def getClientByMAC(mac,cursor):
         new = newClient()
         new['mac'] = mac
         wireless[mac] = new
-        cursor.execute("SELECT ssid FROM clients WHERE mac=?",(mac,))
+        cursor.execute("SELECT ssid,os,model FROM clients WHERE mac=?",(mac,))
         row = cursor.fetchone()
         if row==None:
             cursor.execute("INSERT into clients (mac,added,last) values (?,?,?)",(mac,datetime.now(),datetime.now()))
@@ -45,6 +51,8 @@ def getClientByMAC(mac,cursor):
             ssid = row[0]
             if ssid is not None:
                 new['ssid'] = row[0]
+            new['os']=row[1] 
+            new['model']=row[2]
         return new
 def getClientByIP(ip,cursor):
     if ip in clients:
@@ -166,15 +174,18 @@ class Site(object):
             probes = cursor.fetchall()
             cursor.execute("SELECT agent FROM agents WHERE mac=?",(mac,))
             agents = cursor.fetchall()
-            cursor.execute("SELECT first,last FROM sessions WHERE mac=? ORDER BY first DESC",(mac,))
+            cursor.execute("SELECT url FROM urls WHERE mac=?",(mac,))
+            urls = cursor.fetchall()
+
+            cursor.execute("SELECT first,last,latitude,longitude,gps_reliable FROM sessions WHERE mac=? ORDER BY first DESC",(mac,))
             sessions = cursor.fetchall()
 
-            return tmpl.render(info=client,probes=probes,agents=agents,sessions=sessions)
+            return tmpl.render(info=client,probes=probes,agents=agents,sessions=sessions,urls=urls)
 
     @cherrypy.expose
     def mystats(self):
         tmpl = lookup.get_template("stats.html")
-        return tmpl.render()
+        return tmpl.render(pos=gps.get())
 
     @cherrypy.expose
     def default(self,*args,**kwargs):
@@ -200,12 +211,29 @@ class Site(object):
             name=client.get('name')
             ssid=client.get('ssid')
             agents = client['agents']
+            urls = client['urls']
+
+            try:
+                if (client["os"] is None or client["model"] is None) and agent:
+                    os_info = phones.parse_agent(agent)
+                    print agent,"os_info",os_info
+                    if os_info:
+                        if os_info[0]!=client["os"] or os_info[1]!=client["model"]:
+                            print "update os info"
+                            cursor.execute("UPDATE clients SET os=?,model=? WHERE mac=?",(os_info[0],os_info[1],mac))
+            except:
+                print "os fail"
             if agent is not None and agent not in agents:
                 cursor.execute("INSERT OR IGNORE INTO agents (mac,agent,added)  VALUES (?,?,?)",(mac,agent,datetime.now()))
                 print 'add agent'
                 agents |= {agent}
             url = cherrypy.url()
-            client['urls'].append(url)
+
+            if url is not None and url not in urls:
+                cursor.execute("INSERT OR IGNORE INTO urls (mac,url,added)  VALUES (?,?,?)",(mac,url,datetime.now()))
+                urls |= {url}
+
+            #print "!!URL!!%s!!%s" % (mac,url)
             cherrypy.log("!!URL!!%s!!%s" % (mac,url))
             if 'vk.com' in  url:
                 cherrypy.log("vk: %s" % (str(headers),))
@@ -225,7 +253,52 @@ class Site(object):
                 cherrypy.log("submit: [%s,%s,%s,%s]->%s,agent %s,DATA %s" % (ip,mac,name,ssid,url,agent,data))        
                 cursor.execute("UPDATE clients SET data=? WHERE mac=?",(data,mac))
                 print 'data'
+        if agent and "CaptiveNetworkSupport" in agent:
+            print "!!!!!CaptiveNetworkSupport!!! processed"
+            cherrypy.response.status=200
+            return "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"
         return cachedIndex
+"""        newheaders = {} 
+        for h in headers:
+            if h=='Remote-Addr' or h=='Accept-Encoding':
+                continue
+            newheaders[h] = headers[h]
+
+        #print url,":",newnheaders
+        #Remote-Addr
+        req = urllib2.Request(url)
+        for h in newheaders:
+            req.add_header(h,newheaders[h])
+            print h,"@@=@@",newheaders[h]
+
+        response = urllib2.urlopen(req)
+        #print "!!!!!!!geturl!!!!!!!", response.geturl()
+        #print "!!!!!!!!!info!!!!!!!!!!", response.info().headers
+        #print "!!!getplist!!!!",response.getplist()
+        #print "!!!!!!!!!getcode!!!!!!!!!!", response.getcode()
+
+        html = response.read()
+        resp = cherrypy.response
+        #print html
+        resp.body = html
+        
+        print html
+        #with open('myfile','w') as f:
+        #    f.write(html)
+
+        print "response.getcode()",response.getcode()
+        rheaders = response.info().dict
+        for h in rheaders:
+            if h=='transfer-encoding':
+                continue
+            print h,"!=!",rheaders[h]
+            cherrypy.response.headers[h] = rheaders[h]
+        cherrypy.response.status=response.getcode()
+        #print url,"-",len(html)
+        #raise ValueError('A very specific bad thing happened')
+        return html
+"""
+
 def follow(thefile):
     thefile.seek(0,2)
     while True:
@@ -235,7 +308,7 @@ def follow(thefile):
             continue
         yield line
 
-def newSession(cursor,mac,time):
+def newSession(cursor,mac,time,gpspos):
     session = {}
     cursor.execute("INSERT INTO sessions (mac,first,last) VALUES (?,?,?)",(mac,time,time))
     print "new session ",cursor.lastrowid,"-",mac,"-",time
@@ -243,12 +316,21 @@ def newSession(cursor,mac,time):
     session['first'] = time
     session['last'] = time
     session['timer'] = None
+    session["latitude"] = None
+    session["longitude"] = None
+    session["gps_reliable"] = None
+    if gpspos:
+        session['latitude'] = gpspos[0]
+        session['longitude'] = gpspos[1]
+        session['gps_reliable'] = gpspos[2]
     return session
 def saveSession(client,cursor):
     session = client['session']
     last = session['last']
     mac = client['mac']
-    print "save session ",session['id'],"-",mac,"-",last
+    print "save",session
+ #   print "save session ",session['id'],"-",mac,"-",last
+#    cursor.execute("UPDATE sessions SET last=?,latitude=?,longitude=?,gps_reliable=? WHERE id=?",(last,session['latitude'],session["longitude"],session["gps_reliable"],session['id']))
     cursor.execute("UPDATE sessions SET last=? WHERE id=?",(last,session['id']))
     cursor.execute("UPDATE clients SET last=? WHERE mac=?",(last,mac))
 
@@ -260,7 +342,7 @@ updateTimer = None
 def updateClients():
     global updateTimer,updateDict
     start = time.time()
-    print "START !!!!!!!!!delayed save!!!!!!!"
+#    print "START !!!!!!!!!delayed save!!!!!!!"
     with updateLock:
         con = get_con()
         with con:
@@ -270,19 +352,20 @@ def updateClients():
             updateDict = {}
             updateTimer = None
     end = time.time()
-    print "measure updateClients",end - start
-    print "END !!!!!!!!!delayed save!!!!!!!"
+#    print "measure updateClients",end - start
+#    print "END !!!!!!!!!delayed save!!!!!!!"
 
 def updateLastSeen(client,cursor):
     global updateTimer,updateDict
     now = datetime.now()
     mac = client['mac']
+    gpspos = gps.get()
     if 'session' not in client:
  #       print "session is not in client"
-        cursor.execute("SELECT id,first,last,mac from sessions WHERE mac=? ORDER BY last DESC LIMIT 1",(mac,))
+        cursor.execute("SELECT id,first,last,mac,latitude,longitude,gps_reliable from sessions WHERE mac=? ORDER BY last DESC LIMIT 1",(mac,))
         last_session = cursor.fetchone()
         if last_session is None:
-            client['session'] = newSession(cursor,mac,now)
+            client['session'] = newSession(cursor,mac,now,gpspos)
             saveSession(client,cursor)
         else:
 #            print "last",last_session
@@ -291,16 +374,26 @@ def updateLastSeen(client,cursor):
             session['first'] = last_session[1]
             session['last'] = last_session[2]
             session['timer'] = None
+            session['latitude']=last_session[4]
+            session['longitude']=last_session[5]
+            session['gps_reliable']=last_session[6]
             client['session'] = session
     session = client['session']
     if (now-session['last']).total_seconds()>session_interval:
         print "INTERVAL EXCEEDED;NEW SESSION"
         saveSession(client,cursor)
-        client['session'] = newSession(cursor,mac,now)
+        session = newSession(cursor,mac,now,gpspos)
+        client['session'] = session
         saveSession(client,cursor)
     elif now>session['last']:
         client['last'] = now
         session['last'] = now
+        if gpspos:
+            if gpspos[2]>0 or session['latitude']==None:
+               session['latitude'] = gpspos[0]
+               session['longitude'] = gpspos[1]
+               session['gps_reliable'] = gpspos[2]
+
         with updateLock:
 #            print "update client ",mac," with delay"
             updateDict[mac] = client
@@ -324,7 +417,7 @@ def cleansid(sid):
     except:
         return "invalid"
 def airbaseReader():
-    logfile = open("/var/log/airbase.log","r")
+    logfile = open("/var/log/airbase/airbase.log","r")
     probe=re.compile('directed probe request from ([a-f0-9:]+)\s+-\s+"(.*)"',re.IGNORECASE);
     assoc=re.compile('client\s+([a-f0-9:]+)\s+(?:re)?associated.*ESSID:\s+"(.*)"',re.IGNORECASE);
     con = get_con()
@@ -370,6 +463,8 @@ def create_db():
            saw integer DEFAULT 0,
            data text,
            name varchar(255),
+           os varchar(255),
+           model varchar(255),
            added timestamp,
            last timestamp,
            ssid varchar(255))""")
@@ -377,7 +472,16 @@ def create_db():
     c.execute("""create unique index probes_index ON probes (mac,ssid)""")
     c.execute("""create table agents (mac char(17),agent text,added timestamp)""")
     c.execute("""create unique index agents_index ON agents (mac,agent)""")
-    c.execute("""create table sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,mac char(17),first timestamp,last timestamp)""")
+    c.execute("""create table sessions (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             mac char(17),
+             first timestamp,
+             last timestamp,
+             latitude float,
+             longitude float,
+             gps_reliable integer)""")
+    c.execute("""create table urls (mac char(17),url text,added timestamp)""")
+    c.execute("""create unique index urls_index ON urls (mac,url)""")
 
 def mac_prefix(mac):
     return mac.replace(":","")[:6]
@@ -408,8 +512,12 @@ def init_db():
     c = con.cursor()
 
     try:
+#        c.execute("""ALTER TABLE sessions  ADD COLUMN latitude float""")
+#        c.execute("""ALTER TABLE sessions  ADD COLUMN longitude float""")
+#        c.execute("""ALTER TABLE sessions  ADD COLUMN gps_reliable integer""")
         c.execute("SELECT * from clients LIMIT 1")
-    except:
+    except Exception as inst:
+        print str(inst)
         create_db()
 
 if __name__ == '__main__':
@@ -422,7 +530,10 @@ if __name__ == '__main__':
    thread = Thread(target = airbaseReader)
    thread.daemon = True
    thread.start()
-
+#   while gps.get()==None:
+#       pass
+#   print "gps:",gps.get()
+       
    cachedIndex = tmpl.render()
    conf = {
          '/': {
